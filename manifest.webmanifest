@@ -1,0 +1,10 @@
+{
+  "name": "Runenwacht – Endless Tower Defense",
+  "short_name": "Runenwacht",
+  "start_url": ".",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#15100c",
+  "theme_color": "#1b1410",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
