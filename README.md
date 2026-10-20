@@ -1,39 +1,40 @@
-# ⚔️ Runenwacht
+# 💎 Kristallwacht
 
-Ein endloser Fantasy-Tower-Defense im Browser – für Laptop (Maus/Tastatur) und Tablet (Touch).
-Reines HTML/CSS/JavaScript, keine Abhängigkeiten, kein Build-Schritt.
+Ein endloses Fantasy-Verteidigungsspiel im Stil von *Plants vs. Zombies* – für Tablet und Laptop,
+im **Hoch- und Querformat**. Reines HTML/CSS/JavaScript, keine Abhängigkeiten, keine Bilddateien:
+alle Grafiken werden live auf Canvas gezeichnet.
 
 ## Spielen
 
-- **Lokal:** über einen statischen Webserver öffnen, z. B. `npx http-server -p 8123` (direkt per Doppelklick auf `index.html` geht es nicht, weil das Spiel JavaScript-Module nutzt).
-- **Tablet:** Am einfachsten über GitHub Pages hosten (Repo → Settings → Pages → Branch `main`, Ordner `/`).
-  Danach im Tablet-Browser „Zum Startbildschirm hinzufügen“ – dann läuft es im Vollbild wie eine App.
+- **Online:** über GitHub Pages (Repo → Settings → Pages → Branch `main`, Ordner `/`).
+  Auf dem Tablet danach „Zum Startbildschirm hinzufügen“ – dann läuft es im Vollbild wie eine App.
+- **Lokal:** über einen statischen Webserver, z. B. `npx http-server -p 8123`
+  (ein Doppelklick auf `index.html` reicht nicht, weil das Spiel JavaScript-Module nutzt).
 
-## Steuerung
+## So funktioniert's
 
-| Aktion | Tablet | Laptop |
-|---|---|---|
-| Turm bauen | Turm wählen → Feld antippen → nochmal tippen | Turm wählen (`1`–`6`) → Klick (Shift = mehrere) |
-| Turm verbessern / verkaufen | Turm antippen → Buttons | Klick → `U` / `S` |
-| Zielmodus | Turm antippen → 🎯 | `T` |
-| Meteor | ☄️ → Karte antippen | `M` → Klick |
-| Welle / Tempo / Pause | Buttons oben | `N` / `F` / Leertaste |
+- Monster kommen in 5 Reihen aus dem Wald und laufen auf die Burgmauer zu.
+- Verteidiger kosten **Mana**. Manablüten erzeugen Mana-Kristalle, tagsüber fallen auch welche vom Himmel – antippen zum Einsammeln.
+- Karte antippen und dann ein Feld – oder die Karte direkt aufs Feld ziehen.
+- Verteidiger antippen → verbessern (bis Stufe 3) oder entfernen.
+- Erreicht ein Monster die Mauer, rollt der **Wächterfels** der Reihe los (kehrt nach 3 Wellen zurück). Ist er weg, kostet es ein Herz – nach 3 Herzen ist Schluss.
+- Wellen werden endlos stärker, alle 10 Wellen kommt nachts ein Boss.
 
-## Inhalt
+**Verteidiger (10):** Manablüte, Elfenschützin, Steinwächter, Runenfalle, Frostmagier, Feuerrune, Zwergenarmbrust, Dornenranke, Sturmkristall, Drachenwelpe – neue werden im Lauf der Wellen freigeschaltet.
 
-- 4 Karten mit eigenem Look: Grüner Hain, Schlangenpass, Frostgipfel, Feuerschlund – mit Bäumen, Felsen, Teichen und Lavaseen (dort kann nicht gebaut werden)
-- 6 Türme mit je 4 sichtbaren Ausbaustufen: Bogenschützen, Zwergenkanone, Frostkristall, Sturmturm, Arkaner Turm, Drachenfeuer
-- 19 Monsterarten mit Fähigkeiten (fliegen, heilen, teilen, wiederauferstehen, springen, teleportieren, Raserei, Beschwörung, Schutz-Aura) und Resistenzen
-- 5 Bosse im Wechsel alle 10 Wellen: Trollkönig, Uralter Drache, Lichkönig, Hydra, Dämonenfürst
-- Tag-Nacht-Wechsel mit dynamischem Licht, Wetter (Glühwürmchen, Laub, Schnee, Glut), Partikeleffekte
-- Bestiarium, Wellenvorschau und Infokarte bei jedem neuen Gegner
-- Grafikeinstellung „Hoch“ / „Schnell“ für schwächere Tablets
-- Wellen skalieren endlos; frühes Rufen gibt Bonusgold; Rekorde pro Karte
+**Monster (12 + 4 Bosse):** Goblin, Helmgoblin, Schattenwolf, Skelettkrieger, Schildork, Riesenfledermaus, Schattenklinge, Goblin-Schamane, Steingolem, Nekromant, Imp, Bergtroll · Bosse: Trollkönig, Uralter Drache, Lichkönig, Dämonenfürst.
+
+**Laptop-Tasten:** `1`–`0` Karten, `Leertaste` Pause, `F` Tempo, `N` nächste Welle, `Esc` abbrechen. Mit der Maus sammelt schon das Darüberfahren Mana ein.
 
 ## Code
 
 | Datei | Inhalt |
 |---|---|
-| `js/data.js` | Karten, Türme, Gegner (Werte & Texte) |
-| `js/art.js` | Sämtliche Grafik – alles prozedural auf Canvas gezeichnet, keine Bilddateien |
-| `js/main.js` | Spiellogik, Licht, Eingabe, Oberfläche |
+| `src/data.js` | Verteidiger, Monster, Bosse (Werte & Texte) |
+| `src/art.js` | Spielfeld, Burgmauer, Verteidiger, Mana-Kristalle |
+| `src/monsters.js` | Monster-Grafiken und Zeichen-Helfer |
+| `src/main.js` | Spiellogik, Layout für Hoch/Quer, Licht, Eingabe, Menüs |
+
+## Altes Spiel
+
+Das vorherige Spiel **Runenwacht** (klassischer Tower Defense mit Weg) liegt weiterhin unter [`runenwacht/`](runenwacht/) und ist aus dem Hauptmenü verlinkt.

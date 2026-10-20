@@ -6,44 +6,35 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#1b1410">
+  <meta name="theme-color" content="#0f1a12">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <title>Runenwacht – Endless Tower Defense</title>
+  <title>Kristallwacht – Endless Fantasy Defense</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="app">
-    <header id="hud">
-      <div class="stats">
-        <span class="stat" title="Leben">❤️ <b id="lives">20</b></span>
-        <span class="stat" title="Gold">💰 <b id="gold">0</b></span>
-        <span class="stat" title="Welle">🌊 <b id="wave">0</b></span>
-        <span class="stat" title="Punkte">⭐ <b id="score">0</b></span>
+    <div id="top">
+      <div id="tray">
+        <div id="mana"><canvas id="manaIcon" width="80" height="80"></canvas><b id="manaVal">150</b></div>
+        <div id="cards"></div>
       </div>
-      <div class="controls">
-        <button id="btnWave" class="btn primary">▶ Welle starten</button>
-        <button id="btnSpeed" class="btn" title="Geschwindigkeit (F)">1×</button>
-        <button id="btnAuto" class="btn" title="Nächste Welle automatisch starten">Auto ✓</button>
+      <div id="bar">
+        <span id="waveLbl">Welle 1</span>
+        <span id="hearts"></span>
+        <span id="score"></span>
+        <button id="btnWave" class="btn primary">▶ Los!</button>
+        <button id="btnSpeed" class="btn" title="Tempo (F)">1×</button>
         <button id="btnPause" class="btn" title="Pause (Leertaste)">⏸</button>
       </div>
-    </header>
-    <main id="main">
-      <div id="stage">
-        <canvas id="game"></canvas>
-        <div id="toast"></div>
-      </div>
-      <aside id="panel">
-        <div id="towerList"></div>
-        <div id="nextWave"></div>
-        <button id="btnMeteor" class="spell" title="Meteor (M)">☄️ <span>Meteor</span></button>
-        <div id="info"></div>
-      </aside>
-    </main>
+    </div>
+    <div id="stage">
+      <canvas id="game"></canvas>
+      <div id="popup"></div>
+      <div id="toast"></div>
+    </div>
   </div>
-
   <div id="overlay" class="overlay"></div>
-
-  <script type="module" src="js/main.js"></script>
+  <script type="module" src="src/main.js"></script>
 </body>
 </html>
