@@ -4,12 +4,13 @@ export const MAX_LEVEL = 3;
 export const LEVEL_DMG = [1, 1.5, 2.25];
 export const LEVEL_HP = [1, 1.4, 1.9];
 
-// Verteidiger in Kartenreihenfolge. unlock = ab welcher Welle verfügbar
+// Verteidiger in Kartenreihenfolge. unlock = ab welcher Welle verfügbar.
+// ground = liegt am Boden: wird nicht gefressen und blockiert nicht (nur Trolle zertrampeln es)
 export const DEFENDERS = {
-  bloom: {
-    name: 'Manablüte', cost: 50, cd: 7.5, hp: 300, unlock: 1,
-    desc: 'Erzeugt regelmäßig Mana-Kristalle. Die Grundlage jeder Verteidigung.',
-    prod: { every: 13, first: 5, amount: [25, 35, 50] },
+  miner: {
+    name: 'Kristallschürfer', cost: 50, cd: 7.5, hp: 300, unlock: 1,
+    desc: 'Ein Gnom, der Mana-Kristalle aus dem Boden schlägt. Sie stapeln sich neben ihm – tippe ihn an, um sie einzusammeln. Ist der Stapel voll, macht er Pause.',
+    dig: { every: [4, 3.5, 3], amount: 10, cap: [60, 80, 110] },
   },
   archer: {
     name: 'Elfenschützin', cost: 100, cd: 7.5, hp: 300, unlock: 1,
@@ -18,32 +19,33 @@ export const DEFENDERS = {
   },
   wall: {
     name: 'Steinwächter', cost: 50, cd: 25, hp: 4000, unlock: 2,
-    desc: 'Ein lebender Steinwall, an dem sich Monster die Zähne ausbeißen.',
+    desc: 'Ein lebender Steinwall. Wer an ihm nagt, bricht sich die Zähne: Er wirft ein Viertel des Schadens zurück.',
+    reflect: 0.25,
   },
-  mine: {
-    name: 'Runenfalle', cost: 25, cd: 25, hp: 300, unlock: 3,
-    desc: 'Lädt sich 12 Sekunden lang auf und sprengt dann das erste Monster, das darüberläuft.',
-    arm: 12, blast: 1800,
+  root: {
+    name: 'Wurzelfessel', cost: 75, cd: 12, hp: Infinity, unlock: 3, ground: true,
+    desc: 'Uralte Wurzeln packen das erste Monster, das darüberläuft, halten es fest und würgen es. Lädt sich danach wieder auf.',
+    root: { dur: [3, 3.5, 4], cd: [9, 8, 7], dps: 35 },
   },
   frost: {
     name: 'Frostmagier', cost: 175, cd: 7.5, hp: 300, unlock: 4,
-    desc: 'Eisgeschosse verlangsamen Monster um die Hälfte.',
-    shot: { rate: 0.7, dmg: 20, kind: 'ice', slow: 0.5 },
+    desc: 'Seine Eiskristalle zerspringen beim Aufprall und verlangsamen alle Monster drumherum.',
+    shot: { rate: 0.6, dmg: 22, kind: 'ice', slow: 0.5, splash: 0.8 },
   },
   bomb: {
-    name: 'Feuerrune', cost: 150, cd: 40, hp: 9999, unlock: 6,
-    desc: 'Explodiert sofort und vernichtet alles in einem 3×3-Bereich.',
+    name: 'Feuerrune', cost: 125, cd: 30, hp: Infinity, unlock: 6, ground: true,
+    desc: 'Eine glühende Bodenrune. Sobald ein Monster sie betritt, explodiert sie und verbrennt alles im 3×3-Umkreis.',
     blast: 1800,
   },
   dwarf: {
     name: 'Zwergenarmbrust', cost: 200, cd: 7.5, hp: 300, unlock: 8,
-    desc: 'Feuert zwei Bolzen kurz hintereinander.',
-    shot: { rate: 0.7, dmg: 20, kind: 'bolt', double: true },
+    desc: 'Schwere Bolzen durchschlagen bis zu drei Monster hintereinander.',
+    shot: { rate: 0.55, dmg: 38, kind: 'bolt', pierce: 3 },
   },
-  thorns: {
-    name: 'Dornenranke', cost: 100, cd: 7.5, hp: Infinity, unlock: 10,
-    desc: 'Verletzt alle Monster, die darüberlaufen. Wird nicht gefressen – nur Trolle zertrampeln sie.',
-    dps: 20,
+  portal: {
+    name: 'Schattenportal', cost: 125, cd: 15, hp: Infinity, unlock: 10, ground: true,
+    desc: 'Wer hineinläuft, wird drei Felder zurück in den Wald geschleudert. Bosse sind zu schwer dafür.',
+    portal: { back: 3, cd: [12, 10, 8] },
   },
   storm: {
     name: 'Sturmkristall', cost: 225, cd: 10, hp: 300, unlock: 12,

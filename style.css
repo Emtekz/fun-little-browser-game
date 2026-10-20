@@ -73,6 +73,9 @@ html, body {
 #waveLbl { font-size: 17px; color: var(--gold); white-space: nowrap; }
 #hearts { font-size: 16px; letter-spacing: -2px; white-space: nowrap; }
 #score { font-size: 14px; color: var(--muted); white-space: nowrap; }
+#waveProg { display: inline-block; width: 90px; height: 10px; border-radius: 6px; background: rgba(0, 0, 0, .45); border: 1px solid #8a6a45; overflow: hidden; }
+#waveProg i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #f2c14e, #ff8a3a); transition: width .3s; }
+#waveProg.night i { background: linear-gradient(90deg, #8a6aff, #e0301a); }
 
 .btn {
   min-height: 42px; min-width: 46px; padding: 6px 12px;

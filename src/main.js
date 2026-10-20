@@ -1,7 +1,10 @@
 // Kristallwacht – Spiellogik, Layout (hoch/quer), Eingabe & Oberfläche
 import { COLS, LANES, MAX_LEVEL, LEVEL_DMG, LEVEL_HP, DEFENDERS, DEF_KEYS, MONSTERS, BOSS_ORDER, monsterTraits } from './data.js';
 import { TAU, drawEnemy, enemyLift, drawPortrait, glow, glowSprite, setLightSink, setFlat, circ, ell, poly } from './monsters.js';
-import { renderBoard, drawTorch, drawOrb, drawGuardian, drawDefender, drawArmor, drawDefenderIcon } from './art.js';
+import {
+  renderBoard, drawTorch, drawOrb, drawBannRune, drawBanner as drawWallBanner, drawWisp, buildLife, drawLife, drawSunRays,
+  drawDefender, drawArmor, drawDefenderIcon,
+} from './art.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
@@ -9,7 +12,7 @@ const ctx = canvas.getContext('2d');
 const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
-const START_MANA = 150, HEARTS = 3, PREP_TIME = 20, BREAK_TIME = 10;
+const START_MANA = 150, HEARTS = 3, RUNE_RECHARGE = 3;
 const BEST_KEY = 'kristallwacht-best-v1', SETTINGS_KEY = 'kristallwacht-settings-v1';
 function loadJSON(k, d) { try { return JSON.parse(localStorage.getItem(k)) || d; } catch { return d; } }
 function saveJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } }
@@ -64,28 +67,30 @@ function newGame() {
     mana: START_MANA, hearts: HEARTS, wave: 0, score: 0, kills: 0,
     grid: Array.from({ length: LANES }, () => new Array(COLS).fill(null)),
     defenders: [], monsters: [], newMonsters: [], projectiles: [], orbs: [], effects: [], particles: [], texts: [], timers: [],
-    guards: Array.from({ length: LANES }, () => ({ state: 'ready', x: -0.5, rot: 0, recharge: 0, glow: 1 })),
+    runes: Array.from({ length: LANES }, () => ({ ready: true, recharge: 0 })),
     cardCd: Object.fromEntries(DEF_KEYS.map((k) => [k, 0])),
     unlocked: new Set(DEF_KEYS.filter((k) => DEFENDERS[k].unlock <= 1)),
-    phase: 'prep', timer: PREP_TIME, queue: [], waveT: 0, waveLen: 0, hordeAnnounced: true,
-    skyT: 4, time: 0, speed: 1, paused: false, over: false,
+    queue: [], waveT: 0, waveLen: 1, hordeAnnounced: true, sinceSpawn: 0, nextWaveT: 2,
+    wisps: [], wispT: 6, time: 0, speed: 1, paused: false, over: false,
     sel: null, popup: null, hover: null, drag: null,
-    shake: 0, hurtFlash: 0, banner: null, night: 0, seen: new Set(), intro: null, intros: [],
+    shake: 0, hurtFlash: 0, banner: null, night: 0, dusk: 0, seen: new Set(), intro: null, intros: [], life: buildLife(),
     weather: Array.from({ length: 26 }, () => ({ u: Math.random(), v: Math.random(), p: Math.random() * 100, s: rand(0.6, 1.3) })),
   };
   hideOverlay();
   buildCards();
   syncHud(true);
-  S.banner = { text: 'Bereitmachen!', sub: 'Pflanze Manablüten, bevor die Monster kommen', life: 3, max: 3 };
 }
 
 const hpMult = (w) => 1 + Math.max(0, w - 6) * 0.07 + Math.max(0, w - 25) * 0.05;
+// Tageszeit im 10-Wellen-Rhythmus: Tag → Abendrot (7) → Nacht (8–10, Boss) → Morgengrauen (11)
 const isNight = (w) => w > 0 && ((w - 1) % 10) >= 7;
+const isDusk = (w) => w % 10 === 7;
+const dawnWave = (w) => w > 1 && w % 10 === 1;
 
 // ================================================================ Wellen
 function makeWave(w) {
   const boss = w % 10 === 0 ? BOSS_ORDER[(w / 10 - 1) % BOSS_ORDER.length] : null;
-  let budget = Math.round(3 + w * 2.4 + Math.pow(w, 1.35) * 0.4);
+  let budget = Math.round(1 + w * 2 + Math.pow(w, 1.35) * 0.35);
   const pool = Object.entries(MONSTERS).filter(([, d]) => !d.boss && d.unlock && d.unlock <= w)
     .map(([k, d]) => [k, d.pts, d.wt * (w - d.unlock > 12 && d.pts <= 2 ? 0.5 : 1)]);
   const pick = (maxPts) => {
@@ -95,12 +100,13 @@ function makeWave(w) {
     for (const p of avail) { v -= p[2]; if (v <= 0) return p; }
     return avail[0];
   };
-  const dur = Math.min(55, 22 + w * 1.2);
+  const dur = Math.min(60, 25 + w * 1.2);
   const list = [];
   let lastLane = -1, sameCount = 0;
   const lane = () => {
-    let l = Math.floor(Math.random() * LANES);
-    if (l === lastLane && ++sameCount > 1) { l = (l + 1 + Math.floor(Math.random() * (LANES - 1))) % LANES; sameCount = 0; }
+    // in den ersten Wellen kommen Monster nur in den mittleren drei Reihen
+    let l = w <= 3 ? 1 + Math.floor(Math.random() * 3) : Math.floor(Math.random() * LANES);
+    if (w > 3 && l === lastLane && ++sameCount > 1) { l = (l + 1 + Math.floor(Math.random() * (LANES - 1))) % LANES; sameCount = 0; }
     if (l !== lastLane) sameCount = 0;
     lastLane = l;
     return l;
@@ -116,38 +122,36 @@ function makeWave(w) {
   return { list, dur, boss };
 }
 
+// Wellen laufen automatisch: die nächste beginnt, sobald die vorige komplett losgeschickt ist
+// und entweder das Feld leer ist oder seit dem letzten Monster ein paar Sekunden vergangen sind.
 function startWave() {
-  if (!S || S.over || S.phase === 'wave') return;
-  if (S.phase === 'break' || S.phase === 'prep') {
-    const bonus = Math.floor(S.timer) * 2;
-    if (bonus > 0 && S.wave > 0) { S.mana += bonus; floatTextAt(L.w / 2, L.h * 0.18, `+${bonus} Mana (früh gestartet)`, '#9ee8ff'); }
-  }
+  if (!S || S.over) return;
+  if (S.wave > 0) waveDone();
   S.wave++;
-  S.phase = 'wave';
-  S.timer = 0;
   const wv = makeWave(S.wave);
-  S.queue = wv.list; S.waveT = 0; S.waveLen = wv.dur; S.hordeAnnounced = false;
+  // in Welle 1 kommen die ersten Monster erst nach einer kurzen Schonfrist
+  if (S.wave === 1) for (const q of wv.list) q.t += 14;
+  S.queue = wv.list; S.waveT = 0; S.waveLen = wv.dur + (S.wave === 1 ? 14 : 0); S.hordeAnnounced = false;
   const newly = DEF_KEYS.filter((k) => DEFENDERS[k].unlock === S.wave && !S.unlocked.has(k));
   for (const k of newly) S.unlocked.add(k);
   if (newly.length) { buildCards(); S.intros.push({ kind: 'def', type: newly[0] }); }
   let sub = '';
-  if (isNight(S.wave) && !isNight(S.wave - 1)) sub = 'Die Nacht bricht herein – kein Mana vom Himmel!';
+  if (S.wave === 1) sub = 'Setze Kristallschürfer – die Monster kommen gleich!';
+  if (isNight(S.wave) && !isNight(S.wave - 1)) sub = 'Die Nacht bricht herein …';
+  if (dawnWave(S.wave)) sub = 'Ein neuer Morgen dämmert';
   if (newly.length) sub = `Neuer Verteidiger: ${DEFENDERS[newly[0]].name}!`;
   S.banner = { text: wv.boss ? `Welle ${S.wave} – ${MONSTERS[wv.boss].name}!` : `Welle ${S.wave}`, sub, life: 2.8, max: 2.8, boss: !!wv.boss };
 }
 
-function waveCleared() {
-  S.phase = 'break';
-  S.timer = BREAK_TIME;
+function waveDone() {
   S.score += S.wave * 100;
-  for (const [l, g] of S.guards.entries()) {
-    if (g.state === 'gone' && --g.recharge <= 0) {
-      g.state = 'ready'; g.x = -0.5; g.rot = 0; g.glow = 0;
-      const p = L.pt(-0.5, l);
+  for (const [l, r] of S.runes.entries()) {
+    if (!r.ready && --r.recharge <= 0) {
+      r.ready = true;
+      const p = L.pt(-0.96, l);
       sparkle(p.x, p.y, '#9ee8ff', 16);
     }
   }
-  floatTextAt(L.w / 2, L.h * 0.4, `Welle ${S.wave} überstanden!`, '#8fe07a', 2);
 }
 
 // ================================================================ Monster
@@ -198,7 +202,7 @@ function kill(m, src) {
   const col = m.type === 'skeleton' || m.type === 'lich' || m.type === 'necro' ? '#9ff0ff' : m.def.color;
   burst(p.x, p.y - L.cs * 0.4, col, m.def.boss ? 50 : 12, m.def.boss ? 3 : 1.6, m.type === 'skeleton' || m.type === 'imp');
   if (m.def.boss) { S.shake = 0.6; ring(p.x, p.y, L.cs * 3, '255,220,120', 0.8, true); burst(p.x, p.y, '#f2c14e', 40, 3, true); }
-  if (Math.random() < (m.def.boss ? 1 : 0.05)) spawnOrb(m.x, m.l, m.def.boss ? 75 : 25, 'drop');
+  if (m.def.boss) spawnOrb(m.x, m.l, 100);
   if (m.def.revive && !m.revived) {
     const { l, x, maxHp } = m;
     S.timers.push({ t: 1.4, fn: () => {
@@ -249,8 +253,25 @@ function updateMonster(m, dt) {
       const d = c >= 0 && c < COLS ? S.grid[m.l][c] : null;
       const q = L.pt(c + 0.5, m.l);
       if (c >= 0 && c < COLS) for (let i = 0; i < 10; i++) addP(q.x + rand(-15, 15), q.y + rand(-10, 10), rand(-20, 20), rand(-80, -30), 0.6, i % 2 ? '#ff7a1a' : '#ffd040', 4, 0, true);
-      if (d && d.type !== 'thorns') damageDefender(d, 400);
+      if (d && !d.def.ground) damageDefender(d, 400);
     }
+  }
+
+  // von der Wurzelfessel festgehalten
+  if (m.rootT > 0) {
+    m.rootT -= dt;
+    m.lean = Math.sin(S.time * 18 + m.wob) * 0.08;
+    hurt(m, m.rootDps * dt, 'phys', m.rootSrc);
+    if (m.rootT <= 0) m.lean = 0;
+    return;
+  }
+  // vom Bannrunen-Stoß zurückgeschleudert
+  if (m.knockT > 0) {
+    m.knockT -= dt;
+    m.x = Math.min(9.6, m.x + m.knockV * dt);
+    m.hop = Math.sin((1 - m.knockT / 0.5) * Math.PI) * 18;
+    if (m.knockT <= 0) m.hop = 0;
+    return;
   }
 
   // Sprung (Schattenklinge)
@@ -286,6 +307,7 @@ function updateMonster(m, dt) {
     else {
       m.lean = -0.1 + Math.sin(S.time * 10 + m.wob) * 0.14;
       damageDefender(d, (m.def.bite || 100) * f * dt);
+      if (d.def.reflect) hurt(m, (m.def.bite || 100) * f * dt * d.def.reflect * LEVEL_DMG[d.level - 1], 'phys', d);
       if (Math.random() < dt * 3) { const q = L.pt(d.c + 0.7, d.l); addP(q.x, q.y - L.cs * 0.2, rand(-30, 30), rand(-60, -20), 0.4, '#d8c8a0', 2.5, 200); }
       return;
     }
@@ -295,12 +317,10 @@ function updateMonster(m, dt) {
   if (!m.flying) {
     const front = m.x - 0.32, c = Math.floor(front);
     const d = c >= 0 && c < COLS ? S.grid[m.l][c] : null;
-    if (d && d.type !== 'bomb') {
-      if (d.type === 'thorns') {
-        if (m.def.smash && !m.smashTarget) { m.smashT = 0.9; m.smashTarget = d; }
-      } else if (d.type === 'mine' && d.armed) {
-        explodeMine(d);
-      } else if (m.def.jump && !m.jumped) {
+    if (d && d.def.ground) {
+      groundTrap(m, d);
+    } else if (d) {
+      if (m.def.jump && !m.jumped) {
         m.jumped = true; m.jumpT = 0.6;
       } else if (m.def.smash) {
         m.smashT = 1.1; m.smashTarget = d;
@@ -308,22 +328,53 @@ function updateMonster(m, dt) {
         m.eating = d;
       }
     }
-    const tc = Math.floor(m.x);
-    const td = tc >= 0 && tc < COLS ? S.grid[m.l][tc] : null;
-    if (td && td.type === 'thorns') hurt(m, td.def.dps * LEVEL_DMG[td.level - 1] * dt, 'phys', td);
   }
 
   if (m.x < -0.25) breach(m);
   m.hpShown += (m.hp - m.hpShown) * Math.min(1, dt * 4);
 }
 
+// Bodenfallen: Wurzelfessel, Feuerrune, Schattenportal
+function groundTrap(m, d) {
+  const p = L.pt(d.c + 0.5, d.l);
+  if (m.def.smash && d.type !== 'bomb') {
+    if (!m.smashTarget) { m.smashT = 0.9; m.smashTarget = d; }
+    return;
+  }
+  if (d.type === 'bomb') return explodeBomb(d);
+  if (d.cdT > 0) return;
+  if (d.type === 'root') {
+    m.rootT = d.def.root.dur[d.level - 1];
+    m.rootDps = d.def.root.dps * LEVEL_DMG[d.level - 1];
+    m.rootSrc = d;
+    m.eating = null;
+    d.cdT = d.cdMax = d.def.root.cd[d.level - 1];
+    d.active = m.rootT;
+    burst(p.x, p.y + L.cs * 0.2, '#6ac04a', 14, 1.4);
+  } else if (d.type === 'portal' && !m.def.boss) {
+    smoke(p.x, p.y, 6);
+    for (let i = 0; i < 16; i++) addP(p.x, p.y, rand(-60, 60), rand(-90, -20), 0.6, '#c080ff', 3, 0, true);
+    m.x = Math.min(9.6, m.x + d.def.portal.back);
+    m.eating = null;
+    const q = monPos(m);
+    ring(q.x, q.y, L.cs * 0.8, '190,120,255', 0.5, true);
+    for (let i = 0; i < 12; i++) addP(q.x, q.y - L.cs * 0.3, rand(-50, 50), rand(-70, 10), 0.6, '#c080ff', 3, 0, true);
+    d.cdT = d.cdMax = d.def.portal.cd[d.level - 1];
+    d.flash = 1;
+  }
+}
+
+// Durchbruch: die Bannrune der Reihe stößt alle Monster zurück – sonst kostet es ein Herz
 function breach(m) {
   if (S.over) { m.dead = true; return; }
-  const g = S.guards[m.l];
-  if (g.state === 'ready') {
-    g.state = 'rolling'; g.x = -0.5;
-    if (m.def.boss) { hurt(m, m.maxHp * 0.4, 'phys', null); m.x = 0.3; }
-    else { m.dead = true; burst(monPos(m).x, monPos(m).y, m.def.color, 10, 2); }
+  const r = S.runes[m.l];
+  if (r.ready) {
+    r.ready = false; r.recharge = RUNE_RECHARGE;
+    m.x = 0.1;
+    S.effects.push({ type: 'shock', l: m.l, x: -0.6, life: 2, max: 2, hit: new Set() });
+    S.shake = Math.max(S.shake, 0.4);
+    const p = L.pt(-0.96, m.l);
+    ring(p.x, p.y, L.cs * 1.2, '120,230,255', 0.6, true);
     return;
   }
   m.dead = true;
@@ -335,20 +386,21 @@ function breach(m) {
   if (S.hearts <= 0) gameOver();
 }
 
-function updateGuards(dt) {
-  for (const [l, g] of S.guards.entries()) {
-    g.glow = Math.min(1, g.glow + dt);
-    if (g.state !== 'rolling') continue;
-    g.x += 5 * dt;
-    g.rot += 9 * dt;
+// Stoßwelle der Bannrune läuft die Reihe entlang
+function updateShocks(dt) {
+  for (const fx of S.effects) {
+    if (fx.type !== 'shock') continue;
+    fx.x += 8 * dt;
     for (const m of S.monsters) {
-      if (m.dead || m.l !== l || Math.abs(m.x - g.x) > 0.45) continue;
-      if (m.def.boss) { if (!m.guardHit) { m.guardHit = true; hurt(m, m.maxHp * 0.4, 'phys', null); } }
-      else { hurt(m, m.hp + m.armor + 1, 'phys', null); }
+      if (m.dead || m.l !== fx.l || fx.hit.has(m) || m.x > fx.x) continue;
+      fx.hit.add(m);
+      hurt(m, m.def.boss ? m.maxHp * 0.15 : m.hp * 0.5 + m.armor * 0.5, 'magic', null);
+      m.eating = null; m.smashT = 0; m.smashTarget = null; m.rootT = 0; m.lean = 0;
+      m.knockT = 0.5; m.knockV = m.def.boss ? 4 : 8;
     }
-    const p = L.pt(g.x, l);
-    if (Math.random() < dt * 20) addP(p.x, p.y + L.cs * 0.25, rand(-20, 20), rand(-40, -10), 0.5, 'rgba(140,120,90,0.6)', 6, 0, false, 'smoke');
-    if (g.x > COLS + 1.2) { g.state = 'gone'; g.recharge = 3; }
+    const p = L.pt(fx.x, fx.l);
+    if (fx.x < COLS + 0.5) for (let i = 0; i < 3; i++) addP(p.x, p.y + rand(-L.cs * 0.4, L.cs * 0.4), rand(-30, 30), rand(-40, 40), 0.4, '#9ee8ff', 3, 0, true);
+    if (fx.x > COLS + 1.5) fx.life = 0;
   }
 }
 
@@ -366,7 +418,8 @@ function place(type, c, l) {
   if (!canPlace(type, c, l)) { toast('Feld ist belegt'); return false; }
   const d = {
     type, def, c, l, level: 1, hp: def.hp, maxHp: def.hp, cd: 0.6, charge: 0, spent: def.cost, kills: 0,
-    prodT: def.prod ? def.prod.first : 0, prodReady: 0, armT: def.arm || 0, armed: false, fuse: type === 'bomb' ? 0.9 : 0,
+    digT: def.dig ? 2 : 0, swing: 0, pile: 0, pileMax: def.dig ? def.dig.cap[0] : 0,
+    cdT: 0, cdMax: 1, active: 0, flash: 0,
     fireT: 0, hitFlash: 0, wob: Math.random() * 10, dead: false,
   };
   S.mana -= def.cost;
@@ -436,21 +489,26 @@ function laneTarget(d, minX, maxX = 9.3) {
 function updateDefender(d, dt) {
   d.hitFlash = Math.max(0, d.hitFlash - dt);
   const def = d.def, lv = LEVEL_DMG[d.level - 1];
-  if (def.prod) {
-    d.prodT -= dt;
-    d.prodReady = clamp(1 - d.prodT / 3, 0, 1);
-    if (d.prodT <= 0) { d.prodT = def.prod.every; spawnOrb(d.c + 0.5, d.l, def.prod.amount[d.level - 1], 'bloom'); }
-    return;
-  }
-  if (d.type === 'mine') {
-    if (!d.armed && (d.armT -= dt) <= 0) {
-      d.armed = true;
-      const p = L.pt(d.c + 0.5, d.l); sparkle(p.x, p.y, '#ff8a40', 10);
+  if (def.dig) {
+    d.swing = Math.max(0, d.swing - dt * 1.8);
+    d.pileMax = def.dig.cap[d.level - 1];
+    if (d.pile >= d.pileMax) {
+      if (settings.autoCollect) collectPile(d);
+      return;
+    }
+    if ((d.digT -= dt) <= 0) {
+      d.digT = def.dig.every[d.level - 1];
+      d.swing = 1;
+      d.pile = Math.min(d.pileMax, d.pile + def.dig.amount);
+      const p = L.pt(d.c + 0.75, d.l);
+      for (let i = 0; i < 7; i++) addP(p.x, p.y + L.cs * 0.12, rand(-50, 50), rand(-110, -40), 0.45, i % 2 ? '#bff0ff' : '#ffffff', 2.4, 260, true);
     }
     return;
   }
-  if (d.type === 'bomb') {
-    if ((d.fuse -= dt) <= 0) explodeBomb(d);
+  if (def.ground) {
+    d.active = Math.max(0, d.active - dt);
+    d.flash = Math.max(0, d.flash - dt * 2);
+    if (d.cdT > 0) d.cdT = Math.max(0, d.cdT - dt);
     return;
   }
   if (def.shot) {
@@ -461,9 +519,10 @@ function updateDefender(d, dt) {
     d.cd = 1 / def.shot.rate;
     const dmg = def.shot.dmg * lv;
     if (d.type === 'storm') return zap(d, target, dmg);
-    const shoot = () => { if (!d.dead) S.projectiles.push({ kind: def.shot.kind, l: d.l, x: d.c + 0.85, px: d.c + 0.85, speed: 7, dmg, slow: def.shot.slow, src: d }); };
-    shoot();
-    if (def.shot.double) S.timers.push({ t: 0.18, fn: shoot });
+    S.projectiles.push({
+      kind: def.shot.kind, l: d.l, x: d.c + 0.85, px: d.c + 0.85, speed: def.shot.pierce ? 9 : 7, dmg, src: d,
+      slow: def.shot.slow, splash: def.shot.splash, pierce: def.shot.pierce || 1, hit: new Set(),
+    });
     return;
   }
   if (def.breath) {
@@ -520,15 +579,10 @@ function jagged(pts, amp) {
   return out;
 }
 
-function explodeMine(d) {
-  const p = L.pt(d.c + 0.5, d.l);
-  for (const m of S.monsters) if (!m.dead && !m.flying && m.l === d.l && m.x > d.c - 0.3 && m.x < d.c + 1.6) hurt(m, d.def.blast * LEVEL_DMG[d.level - 1], 'phys', d);
-  explosion(p.x, p.y, L.cs * 0.9);
-  removeDefender(d);
-}
 function explodeBomb(d) {
+  if (d.dead) return;
   const p = L.pt(d.c + 0.5, d.l);
-  for (const m of S.monsters) if (!m.dead && Math.abs(m.l - d.l) <= 1 && m.x > d.c - 1.2 && m.x < d.c + 2.3) hurt(m, d.def.blast, 'fire', d);
+  for (const m of S.monsters) if (!m.dead && Math.abs(m.l - d.l) <= 1 && m.x > d.c - 1.2 && m.x < d.c + 2.3) hurt(m, d.def.blast * LEVEL_DMG[d.level - 1], 'fire', d);
   explosion(p.x, p.y, L.cs * 1.6);
   removeDefender(d);
 }
@@ -547,31 +601,40 @@ function updateProjectile(p, dt) {
   p.x += p.speed * dt;
   let hit = null;
   for (const m of S.monsters) {
-    if (m.dead || m.l !== p.l || m.x - 0.25 > p.x || m.x < p.px - 0.3) continue;
+    if (m.dead || m.l !== p.l || p.hit.has(m) || m.x - 0.25 > p.x || m.x < p.px - 0.3) continue;
     if (!hit || m.x < hit.x) hit = m;
   }
   const sp = L.pt(p.x, p.l);
   if (p.kind === 'ice' && Math.random() < 0.7) addP(sp.x, sp.y - L.cs * 0.3, rand(-10, 10), rand(-10, 10), 0.3, '#dff6ff', 2, 0, true);
   if (hit) {
-    p.done = true;
+    p.hit.add(hit);
     hurt(hit, p.dmg, 'phys', p.src);
-    if (p.slow) { hit.slowT = 3; hit.slowF = hit.def.boss ? p.slow * 0.5 : p.slow; }
     const q = monPos(hit);
-    burst(q.x, q.y - L.cs * 0.4, p.kind === 'ice' ? '#c8f0ff' : '#e8d8b0', 5, 1, p.kind === 'ice');
+    if (p.splash) {
+      // Eiskristall zerspringt: verlangsamt alles drumherum
+      for (const m of S.monsters) {
+        if (m.dead || m.l !== p.l || Math.abs(m.x - hit.x) > p.splash) continue;
+        if (m !== hit) hurt(m, p.dmg * 0.4, 'magic', p.src);
+        m.slowT = 3; m.slowF = m.def.boss ? p.slow * 0.5 : p.slow;
+      }
+      ring(q.x, q.y - L.cs * 0.3, L.cs * p.splash, '170,230,255', 0.35, true);
+      burst(q.x, q.y - L.cs * 0.4, '#dff6ff', 12, 1.4, true);
+    } else burst(q.x, q.y - L.cs * 0.4, '#e8d8b0', 5, 1);
+    if (p.hit.size >= p.pierce) p.done = true;
   } else if (p.x > COLS + 0.8) p.done = true;
 }
 
 // ================================================================ Mana
-function spawnOrb(x, l, value, kind) {
-  const o = { x: clamp(x + (kind === 'bloom' ? rand(-0.3, 0.3) : 0), 0.2, COLS - 0.2), l, value, kind, t: 0, life: 10, fall: kind === 'sky' ? 0 : 1, pop: kind === 'sky' ? 0 : 0.5, wob: Math.random() * 10 };
+// Kristalle, die z. B. ein Boss fallen lässt, liegen kurz am Boden
+function spawnOrb(x, l, value) {
+  const o = { x: clamp(x, 0.2, COLS - 0.2), l, value, t: 0, life: 10, pop: 0.5, wob: Math.random() * 10 };
   S.orbs.push(o);
-  if (settings.autoCollect) o.auto = kind === 'sky' ? 3.6 : 0.8;
+  if (settings.autoCollect) o.auto = 0.8;
   return o;
 }
 function orbScreen(o) {
   const p = L.pt(o.x, o.l);
   let y = p.y - L.cs * 0.1;
-  if (o.fall < 1) y -= (1 - o.fall) * (p.y + L.cs);
   if (o.pop > 0) y -= Math.sin((o.pop / 0.5) * Math.PI) * L.cs * 0.5;
   return { x: p.x, y };
 }
@@ -583,19 +646,64 @@ function collect(o) {
   S.mana += o.value;
   S.score += 5;
 }
+// fliegender Kristall zur Mana-Anzeige (nur Optik, Mana wird sofort gutgeschrieben)
+function flyMana(x, y, value, n = 1) {
+  S.mana += value;
+  S.score += Math.round(value / 5);
+  for (let i = 0; i < n; i++) S.orbs.push({ collected: true, from: { x: x + rand(-8, 8), y: y + rand(-8, 8) }, ct: -i * 0.07, value: 0, t: 0, wob: Math.random() * 10 });
+}
+function collectPile(d) {
+  if (!d.pile) return false;
+  const p = L.pt(d.c + 0.25, d.l);
+  flyMana(p.x, p.y, d.pile, Math.min(5, Math.ceil(d.pile / 20)));
+  floatTextAt(p.x, p.y - L.cs * 0.6, `+${d.pile}`, '#9ee8ff');
+  d.pile = 0;
+  return true;
+}
+
+// Irrlichter schweben über das Feld – fangen bringt Mana
+function updateWisps(dt) {
+  if ((S.wispT -= dt) <= 0) {
+    S.wispT = rand(9, 13);
+    const l = rand(0, LANES - 1);
+    S.wisps.push({ x: COLS + 0.6, l, vx: -rand(0.45, 0.7), ph: Math.random() * 10, t: 0, life: 14, value: 25 });
+  }
+  for (const w of S.wisps) {
+    w.t += dt;
+    w.x += w.vx * dt;
+    w.l = clamp(w.l + Math.sin(w.t * 1.3 + w.ph) * 0.6 * dt, -0.2, LANES - 0.8);
+    if (settings.autoCollect && w.t > 2.5 && w.x < COLS) catchWisp(w);
+    if (w.x < -0.6 || w.t > w.life) w.gone = true;
+    else if (Math.random() < dt * 14) {
+      const p = wispScreen(w);
+      addP(p.x + rand(-4, 4), p.y + rand(-4, 4), rand(-10, 10), rand(-10, 10), 0.5, '#b8fff0', 2, 0, true);
+    }
+  }
+  S.wisps = S.wisps.filter((w) => !w.gone);
+}
+function wispScreen(w) {
+  const p = L.pt(w.x, w.l);
+  return { x: p.x, y: p.y - L.cs * (0.45 + Math.sin(w.t * 2.3 + w.ph) * 0.12) };
+}
+function catchWisp(w) {
+  if (w.gone) return;
+  w.gone = true;
+  const p = wispScreen(w);
+  flyMana(p.x, p.y, w.value, 2);
+  burst(p.x, p.y, '#b8fff0', 14, 1.5, true);
+  floatTextAt(p.x, p.y - L.cs * 0.3, `+${w.value}`, '#b8fff0');
+}
 function manaTarget() {
   const r = $('manaVal').getBoundingClientRect(), c = canvas.getBoundingClientRect();
   return { x: clamp(r.left + r.width / 2 - c.left, 0, L.w), y: clamp(r.top + r.height / 2 - c.top, 0, L.h) };
 }
 function updateOrbs(dt) {
-  if (!isNight(S.wave) && (S.skyT -= dt) <= 0) { S.skyT = rand(8, 11); spawnOrb(rand(0.5, COLS - 0.5), Math.floor(Math.random() * LANES), 25, 'sky'); }
   for (const o of S.orbs) {
     o.t += dt;
     if (o.collected) { o.ct += dt * 2.2; continue; }
-    if (o.fall < 1) o.fall = Math.min(1, o.fall + dt / 4);
     if (o.pop > 0) o.pop = Math.max(0, o.pop - dt);
     if (o.auto != null && (o.auto -= dt) <= 0) collect(o);
-    if (o.fall >= 1 && (o.life -= dt) <= 0) o.gone = true;
+    if ((o.life -= dt) <= 0) o.gone = true;
   }
   S.orbs = S.orbs.filter((o) => !o.gone && !(o.collected && o.ct >= 1));
 }
@@ -625,18 +733,24 @@ function floatTextAt(x, y, text, color, life = 1.1) { S.texts.push({ x, y, text,
 function update(dt) {
   S.time += dt;
   S.night += ((isNight(S.wave) ? 1 : 0) - S.night) * Math.min(1, dt * 0.5);
+  S.dusk += ((isDusk(S.wave) ? 1 : 0) - S.dusk) * Math.min(1, dt * 0.5);
   for (const k of DEF_KEYS) S.cardCd[k] = Math.max(0, S.cardCd[k] - dt);
 
-  if (S.phase === 'prep' || S.phase === 'break') {
-    if ((S.timer -= dt) <= 0) startWave();
+  // Wellen laufen von selbst – keine Pause zum Aufrüsten
+  if (S.wave === 0) {
+    if ((S.nextWaveT -= dt) <= 0) startWave();
   } else {
     S.waveT += dt;
-    while (S.queue.length && S.queue[0].t <= S.waveT) { const q = S.queue.shift(); spawnMonster(q.type, q.l); }
+    S.sinceSpawn += dt;
+    while (S.queue.length && S.queue[0].t <= S.waveT) { const q = S.queue.shift(); spawnMonster(q.type, q.l); S.sinceSpawn = 0; }
     if (!S.hordeAnnounced && S.waveT >= S.waveLen * 0.78) {
       S.hordeAnnounced = true;
       S.banner = { text: 'Eine große Horde naht!', sub: '', life: 2.4, max: 2.4, boss: true };
     }
+    if (!S.queue.length && S.sinceSpawn > 5 && (S.sinceSpawn > 18 || !S.monsters.length)) startWave();
   }
+  updateWisps(dt);
+  updateShocks(dt);
   for (const tm of S.timers) { tm.t -= dt; if (tm.t <= 0) tm.fn(); }
   S.timers = S.timers.filter((tm) => tm.t > 0);
   flush();
@@ -645,7 +759,6 @@ function update(dt) {
   for (const d of S.defenders.slice()) if (!d.dead) updateDefender(d, dt);
   for (const p of S.projectiles) updateProjectile(p, dt);
   S.projectiles = S.projectiles.filter((p) => !p.done);
-  updateGuards(dt);
   updateOrbs(dt);
   for (const fx of S.effects) fx.life -= dt;
   S.effects = S.effects.filter((fx) => fx.life > 0);
@@ -663,7 +776,6 @@ function update(dt) {
   if (S.banner && (S.banner.life -= dt) <= 0) S.banner = null;
   if (S.intro && (S.intro.life -= dt) <= 0) S.intro = null;
   if (!S.intro && S.intros.length) S.intro = { ...S.intros.shift(), life: 5, max: 5 };
-  if (S.phase === 'wave' && !S.queue.length && !S.monsters.length && !S.timers.length) waveCleared();
   for (const w of S.weather) w.p += dt;
 }
 function flush() { if (S.newMonsters.length) { S.monsters.push(...S.newMonsters); S.newMonsters.length = 0; } }
@@ -697,6 +809,8 @@ function render(time) {
     ctx.drawImage(scorchSprite(), fx.x - fx.r, fx.y - fx.r * 0.55, fx.r * 2, fx.r * 1.1);
     ctx.globalAlpha = 1;
   }
+  // Wind im Gras, Blumen, Schmetterlinge, Wolkenschatten, Vögel
+  if (isHigh()) drawLife(ctx, L, S.life, time, S.night);
   // Nebel & Augen im Wald
   for (let i = 0; i < 5; i++) {
     const p = L.pt(9.9 + Math.sin(time * 0.3 + i) * 0.3, i);
@@ -728,14 +842,15 @@ function render(time) {
     ctx.beginPath(); ctx.roundRect(Math.min(a.x, b.x) + 3, Math.min(a.y, b.y) + 3, Math.abs(b.x - a.x) - 6, Math.abs(b.y - a.y) - 6, cs * 0.1); ctx.stroke(); ctx.setLineDash([]);
   }
 
-  // Wächterfelsen
-  for (const [l, g] of S.guards.entries()) {
-    if (g.state === 'gone') continue;
-    const p = L.pt(g.x, l);
-    LT = { ox: sx, oy: sy, k: 1 };
-    ctx.globalAlpha = g.glow;
-    drawGuardian(ctx, p.x, p.y + cs * 0.08, cs / 48, g.rot, g.state === 'ready' ? 0.6 + Math.sin(time * 3 + l) * 0.4 : 1);
-    ctx.globalAlpha = 1;
+  // Bannrunen und wehende Banner an der Mauer
+  LT = { ox: sx, oy: sy, k: 1 };
+  for (let l = 0; l <= LANES; l++) {
+    const p = L.pt(-0.96, l - 0.5);
+    drawWallBanner(ctx, p.x, p.y, cs / 48, time + l * 0.7, l % 2 ? '#3a4fb0' : '#7a2ab0');
+  }
+  for (const [l, r] of S.runes.entries()) {
+    const p = L.pt(-0.96, l);
+    drawBannRune(ctx, p.x, p.y, cs / 48, time + l, r.ready, r.recharge);
   }
 
   // Figuren nach Bildschirm-y sortiert
@@ -751,6 +866,15 @@ function render(time) {
   }
   for (const fx of S.effects) if (fx.type === 'death' && fx.m.flying) drawDeath(fx, L.pt(fx.m.x, fx.m.l), sx, sy, km);
   for (const m of S.monsters) if (m.flying) drawMonster(m, L.pt(m.x, m.l), sx, sy, km, time);
+  // Hinweis: voller Kristallstapel beim Schürfer
+  ctx.setTransform(dpr, 0, 0, dpr, dpr * sx, dpr * sy);
+  LT = { ox: sx, oy: sy, k: 1 };
+  for (const d of S.defenders) {
+    if (!d.def.dig || d.pile < d.pileMax * 0.5) continue;
+    const p = L.pt(d.c + 0.5, d.l);
+    const full = d.pile >= d.pileMax;
+    drawOrb(ctx, p.x, p.y - cs * (0.72 + Math.sin(time * 4 + d.c) * 0.05), (cs / 64) * (full ? 0.8 : 0.55), time, full ? 1 : 0.7);
+  }
 
   // Geschosse
   for (const p of S.projectiles) {
@@ -791,7 +915,25 @@ function render(time) {
       }
       ctx.globalCompositeOperation = 'source-over';
       for (let i = 0; i < fx.pts.length; i += 6) sink(fx.pts[i].x, fx.pts[i].y, cs * 1.2, '210,180,255', a);
+    } else if (fx.type === 'shock') {
+      // Stoßwelle der Bannrune
+      const p = L.pt(Math.min(fx.x, COLS + 0.5), fx.l);
+      const tail = L.pt(Math.max(-0.6, fx.x - 2.5), fx.l);
+      ctx.globalCompositeOperation = 'lighter';
+      const gr = ctx.createLinearGradient(tail.x, tail.y, p.x, p.y);
+      gr.addColorStop(0, 'rgba(120,230,255,0)'); gr.addColorStop(1, 'rgba(160,240,255,0.55)');
+      ctx.strokeStyle = gr; ctx.lineWidth = cs * 0.75; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(tail.x, tail.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+      glow(ctx, p.x, p.y, cs * 0.8, '160,240,255', 0.9);
+      sink(p.x, p.y, cs * 2, '160,240,255', 1);
     }
+  }
+  // Irrlichter
+  for (const w of S.wisps) {
+    const p = wispScreen(w);
+    const fade = Math.min(1, w.t * 2, (w.life - w.t) * 0.8);
+    drawWisp(ctx, p.x, p.y, cs / 48, time + w.ph, fade);
   }
   // Partikel
   for (const p of S.particles) {
@@ -812,16 +954,27 @@ function render(time) {
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
   drawWeather(time);
-  // Mana-Kristalle (am Boden / fallend)
+  // Mana-Kristalle am Boden
   for (const o of S.orbs) if (!o.collected) {
     const p = orbScreen(o);
-    const fade = o.fall >= 1 && o.life < 2 ? (Math.sin(o.life * 12) > 0 ? 1 : 0.4) : 1;
-    drawOrb(ctx, p.x, p.y, (cs / 64) * (o.value >= 50 ? 1.3 : o.value > 25 ? 1.15 : 1), time + o.wob, fade);
+    const fade = o.life < 2 ? (Math.sin(o.life * 12) > 0 ? 1 : 0.4) : 1;
+    drawOrb(ctx, p.x, p.y, (cs / 64) * 1.3, time + o.wob, fade);
   }
 
   composeLighting(sx, sy);
   setLightSink(null);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Abendrot und Sonnenstrahlen
+  if (S.dusk > 0.02) {
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = `rgba(255,170,110,${S.dusk * 0.55})`;
+    ctx.fillRect(0, 0, L.w, L.h);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `rgba(90,30,10,${S.dusk * 0.18})`;
+    ctx.fillRect(0, 0, L.w, L.h);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  if (isHigh()) drawSunRays(ctx, L, time, (1 - S.night) * (1 - S.dusk * 0.5));
 
   // eingesammelte Kristalle fliegen zur Anzeige (über dem Licht)
   const tgt = manaTarget();
@@ -833,7 +986,7 @@ function render(time) {
   if (S.drag && S.drag.active) {
     ctx.globalAlpha = 0.75;
     at(S.drag.x, S.drag.y, kd);
-    drawDefender(ctx, { type: S.drag.type, def: DEFENDERS[S.drag.type], level: 1, hp: 1, maxHp: 1, charge: 0, prodReady: 0, armed: false, armT: 12, fuse: 0.9, wob: 0 }, time, { noUi: true });
+    drawDefender(ctx, { type: S.drag.type, def: DEFENDERS[S.drag.type], level: 1, hp: 1, maxHp: 1, charge: 0, pile: 0, pileMax: 1, cdT: 0, cdMax: 1, wob: 0 }, time, { noUi: true });
     ctx.globalAlpha = 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
@@ -849,15 +1002,6 @@ function render(time) {
   drawBossBar();
   drawIntro();
   drawBanner();
-  if ((S.phase === 'prep' || S.phase === 'break') && S.timer > 0) {
-    const fs = Math.round(clamp(cs * 0.28, 13, 19));
-    ctx.font = `bold ${fs}px Georgia, serif`;
-    const txt = S.phase === 'prep' ? `Erste Welle in ${Math.ceil(S.timer)} s` : `Nächste Welle in ${Math.ceil(S.timer)} s`;
-    const w = ctx.measureText(txt).width + 30;
-    const y = L.portrait ? L.oy + cs * 0.55 : L.oy + cs * 0.22;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.beginPath(); ctx.roundRect(L.w / 2 - w / 2, y - fs, w, fs * 2, fs); ctx.fill();
-    ctx.fillStyle = '#f3e9d8'; ctx.fillText(txt, L.w / 2, y);
-  }
   if (S.hurtFlash > 0) {
     const g = ctx.createRadialGradient(L.w / 2, L.h / 2, Math.min(L.w, L.h) * 0.3, L.w / 2, L.h / 2, Math.max(L.w, L.h) * 0.7);
     g.addColorStop(0, 'rgba(255,0,0,0)'); g.addColorStop(1, `rgba(255,0,0,${S.hurtFlash * 0.8})`);
@@ -1055,13 +1199,12 @@ function syncHud(force) {
   if (!S) return;
   if (force) for (const k in cache) delete cache[k];
   setText($('manaVal'), 'mana', String(Math.floor(S.mana)));
-  setText($('waveLbl'), 'wave', S.wave ? `Welle ${S.wave}` : 'Vorbereitung');
+  setText($('waveLbl'), 'wave', S.wave ? `Welle ${S.wave}` : 'Gleich geht’s los');
   setText($('hearts'), 'hearts', '❤️'.repeat(Math.max(0, S.hearts)) + '🖤'.repeat(Math.max(0, HEARTS - S.hearts)));
   setText($('score'), 'score', `⭐ ${fmt(S.score)}`);
-  let lbl, dis = false;
-  if (S.phase === 'wave') { lbl = '⚔'; dis = true; } else lbl = S.phase === 'prep' ? '▶ Los!' : '▶ Weiter';
-  setText($('btnWave'), 'wb', lbl);
-  if (cache.wbd !== dis) { cache.wbd = dis; $('btnWave').disabled = dis; }
+  const prog = S.wave ? Math.round(clamp(S.waveT / S.waveLen, 0, 1) * 100) : 0;
+  if (cache.prog !== prog) { cache.prog = prog; $('waveProg').firstElementChild.style.width = prog + '%'; }
+  setFlag($('waveProg'), 'wp', 'night', S.night > 0.5);
   setText($('btnSpeed'), 'spd', `${S.speed}×`);
   setText($('btnPause'), 'pause', S.paused ? '▶' : '⏸');
   for (const k of DEF_KEYS) {
@@ -1133,10 +1276,15 @@ canvas.addEventListener('pointerdown', (ev) => {
   if (!S || S.over || S.paused) return;
   ev.preventDefault();
   const p = local(ev);
+  const w = wispAt(p);
+  if (w) { catchWisp(w); return; }
   const o = orbAt(p);
   if (o) { collect(o); return; }
   const { c, l } = cellAt(p);
   const inside = c >= 0 && c < COLS && l >= 0 && l < LANES;
+  // Schürfer mit Kristallen antippen = einsammeln (auch wenn eine Karte gewählt ist)
+  const tapped = inside ? S.grid[l][c] : null;
+  if (tapped && tapped.def.dig && tapped.pile > 0) { collectPile(tapped); return; }
   if (S.sel) {
     if (inside && place(S.sel, c, l)) { S.sel = null; S.hover = null; }
     else if (!inside) S.sel = null;
@@ -1144,14 +1292,25 @@ canvas.addEventListener('pointerdown', (ev) => {
     return;
   }
   const d = inside ? S.grid[l][c] : null;
-  if (d && d.type !== 'bomb') { if (S.popup && S.popup.d === d) closePopup(); else openPopup(d); }
+  if (d) { if (S.popup && S.popup.d === d) closePopup(); else openPopup(d); }
   else closePopup();
 });
+function wispAt(p) {
+  let best = null, bd = (L.cs * 0.6) ** 2;
+  for (const w of S.wisps) {
+    const q = wispScreen(w);
+    const d = (q.x - p.x) ** 2 + (q.y - p.y) ** 2;
+    if (d < bd) { bd = d; best = w; }
+  }
+  return best;
+}
 canvas.addEventListener('pointermove', (ev) => {
-  if (!S || ev.pointerType !== 'mouse') return;
+  if (!S || ev.pointerType !== 'mouse' || S.paused) return;
   const p = local(ev);
+  const w = wispAt(p);
+  if (w) catchWisp(w);
   const o = orbAt(p);
-  if (o && !S.paused) collect(o);
+  if (o) collect(o);
   S.hover = S.sel ? cellAt(p) : null;
 });
 canvas.addEventListener('pointerleave', () => { if (S) S.hover = null; });
@@ -1198,11 +1357,9 @@ window.addEventListener('keydown', (ev) => {
     if (t && S.unlocked.has(t)) { S.sel = S.sel === t ? null : t; closePopup(); syncHud(true); }
   } else if (k === 'escape') { S.sel = null; closePopup(); syncHud(true); }
   else if (k === 'f') $('btnSpeed').click();
-  else if (k === 'n' || k === 'enter') startWave();
-});
+  });
 document.addEventListener('visibilitychange', () => { if (document.hidden && S && !S.over && !S.paused) togglePause(true); });
 
-$('btnWave').addEventListener('click', () => startWave());
 $('btnSpeed').addEventListener('click', () => { if (S) { S.speed = S.speed % 3 + 1; syncHud(); } });
 $('btnPause').addEventListener('click', () => togglePause());
 function togglePause(force) {
@@ -1247,12 +1404,13 @@ function showMenu() {
       <details class="help"><summary>📜 Wie wird gespielt?</summary><ul>
         <li>Monster kommen aus dem Wald und laufen in ihrer Reihe auf die Burg zu.</li>
         <li>Tippe eine Karte an und dann ein Feld – oder ziehe die Karte direkt aufs Feld.</li>
-        <li>Verteidiger kosten Mana 💎. Pflanze <b>Manablüten</b> und sammle die Kristalle durch Antippen ein. Tagsüber fällt auch Mana vom Himmel.</li>
+        <li>Verteidiger kosten Mana 💎. Setze <b>Kristallschürfer</b>: Sie schlagen Kristalle aus dem Boden – tippe sie an, um den Stapel einzusammeln. Ist er voll, machen sie Pause.</li>
+        <li>Fange die <b>Irrlichter</b>, die über die Wiese schweben – jedes bringt 25 Mana.</li>
         <li>Tippe einen Verteidiger an, um ihn zu verbessern oder zu entfernen.</li>
-        <li>Erreicht ein Monster die Mauer, rollt der Wächterfels der Reihe los (er kehrt nach 3 Wellen zurück). Ist er schon weg, verlierst du ein Herz.</li>
+        <li>Erreicht ein Monster die Mauer, entlädt sich die <b>Bannrune</b> der Reihe und schleudert alle Monster zurück (lädt sich in 3 Wellen wieder auf). Ist sie leer, verlierst du ein Herz.</li>
+        <li>Die Wellen kommen von selbst und ohne Pause – nutze jede Sekunde!</li>
         <li>Alle 10 Wellen kommt ein Boss – in der Nacht.</li>
       </ul></details>
-      <p class="old"><a href="runenwacht/">⚔️ Das alte Spiel „Runenwacht“ spielen</a></p>
     </div>`;
   drawHero(overlay.querySelector('.hero'));
   $('ovPlay').onclick = () => newGame();
@@ -1265,14 +1423,14 @@ function drawHero(c) {
   const g = c.getContext('2d');
   const t0 = performance.now();
   const mons = ['goblin', 'shieldorc', 'troll', 'skeleton', 'bat'];
-  const defs = ['archer', 'bloom', 'wall', 'frost'];
+  const defs = ['archer', 'miner', 'wall', 'frost'];
   const frame = () => {
     const t = (performance.now() - t0) / 1000;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, c.width, c.height);
     defs.forEach((k, i) => {
       g.setTransform(1.1, 0, 0, 1.1, 50 + i * 70, 150);
-      drawDefender(g, { type: k, def: DEFENDERS[k], level: 1, hp: 1, maxHp: 1, charge: (t * 0.7 + i * 0.3) % 1, prodReady: 0.5, wob: i }, t, { noUi: true });
+      drawDefender(g, { type: k, def: DEFENDERS[k], level: 1, hp: 1, maxHp: 1, charge: (t * 0.7 + i * 0.3) % 1, swing: Math.max(0, 1 - ((t * 0.6) % 1) * 2), pile: 30, pileMax: 60, wob: i }, t, { noUi: true });
     });
     mons.forEach((k, i) => {
       const def = MONSTERS[k];
@@ -1313,7 +1471,7 @@ function showBook(back) {
       const g = c.getContext('2d'); const k = c.dataset.d;
       g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.width, c.height);
       g.setTransform(1.45, 0, 0, 1.45, 60, 66);
-      drawDefender(g, { type: k, def: DEFENDERS[k], level: 1, hp: 1, maxHp: 1, charge: (t * 0.6) % 1, prodReady: (t * 0.3) % 1, armed: true, fuse: 0.45, wob: 0 }, t, { noUi: true });
+      drawDefender(g, { type: k, def: DEFENDERS[k], level: 1, hp: 1, maxHp: 1, charge: (t * 0.6) % 1, swing: Math.max(0, 1 - ((t * 0.5) % 1) * 2), pile: 30, pileMax: 60, cdT: 0, cdMax: 1, active: (t % 3) < 1.5 ? 1 : 0, wob: 0 }, t, { noUi: true });
     }
     for (const c of mcs) drawPortrait(c, c.dataset.m, MONSTERS[c.dataset.m], t, MONSTERS[c.dataset.m].armor ? armorFull : null);
     overlayAnim = requestAnimationFrame(anim);
