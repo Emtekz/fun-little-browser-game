@@ -5,7 +5,7 @@ Reines HTML/CSS/JavaScript, keine Abhängigkeiten, kein Build-Schritt.
 
 ## Spielen
 
-- **Lokal:** `index.html` über einen beliebigen statischen Webserver öffnen, z. B. `npx http-server -p 8123`.
+- **Lokal:** über einen statischen Webserver öffnen, z. B. `npx http-server -p 8123` (direkt per Doppelklick auf `index.html` geht es nicht, weil das Spiel JavaScript-Module nutzt).
 - **Tablet:** Am einfachsten über GitHub Pages hosten (Repo → Settings → Pages → Branch `main`, Ordner `/`).
   Danach im Tablet-Browser „Zum Startbildschirm hinzufügen“ – dann läuft es im Vollbild wie eine App.
 
@@ -21,8 +21,19 @@ Reines HTML/CSS/JavaScript, keine Abhängigkeiten, kein Build-Schritt.
 
 ## Inhalt
 
-- 3 Karten mit steigender Schwierigkeit, Rekorde pro Karte (localStorage)
-- 6 Türme mit je 4 Stufen: Bogenschützen, Zwergenkanone, Frostkristall, Sturmturm, Arkaner Turm, Drachenfeuer
-- 7 Monsterarten (u. a. Flieger, gepanzerte Golems, heilende Schamanen, sich teilende Schleime)
-- Alle 5 Wellen ein Schwarm, alle 10 Wellen ein Boss (Trollkönig, Uralter Drache, Lichkönig)
-- Wellen skalieren endlos; frühes Rufen gibt Bonusgold
+- 4 Karten mit eigenem Look: Grüner Hain, Schlangenpass, Frostgipfel, Feuerschlund – mit Bäumen, Felsen, Teichen und Lavaseen (dort kann nicht gebaut werden)
+- 6 Türme mit je 4 sichtbaren Ausbaustufen: Bogenschützen, Zwergenkanone, Frostkristall, Sturmturm, Arkaner Turm, Drachenfeuer
+- 19 Monsterarten mit Fähigkeiten (fliegen, heilen, teilen, wiederauferstehen, springen, teleportieren, Raserei, Beschwörung, Schutz-Aura) und Resistenzen
+- 5 Bosse im Wechsel alle 10 Wellen: Trollkönig, Uralter Drache, Lichkönig, Hydra, Dämonenfürst
+- Tag-Nacht-Wechsel mit dynamischem Licht, Wetter (Glühwürmchen, Laub, Schnee, Glut), Partikeleffekte
+- Bestiarium, Wellenvorschau und Infokarte bei jedem neuen Gegner
+- Grafikeinstellung „Hoch“ / „Schnell“ für schwächere Tablets
+- Wellen skalieren endlos; frühes Rufen gibt Bonusgold; Rekorde pro Karte
+
+## Code
+
+| Datei | Inhalt |
+|---|---|
+| `js/data.js` | Karten, Türme, Gegner (Werte & Texte) |
+| `js/art.js` | Sämtliche Grafik – alles prozedural auf Canvas gezeichnet, keine Bilddateien |
+| `js/main.js` | Spiellogik, Licht, Eingabe, Oberfläche |
